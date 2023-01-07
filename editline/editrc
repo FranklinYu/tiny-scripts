@@ -1,2 +1,0 @@
-bind "\e[5~" ed-search-prev-history # PgUp
-bind "\e[6~" ed-search-next-history # PgDn

@@ -9,15 +9,10 @@ on:
 jobs:
   test:
     runs-on: macos-11
-    defaults:
-      run:
-        working-directory: .meta/
     steps:
       - uses: actions/checkout@v2
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
-        with:
-          working-directory: .meta/
       - name: Install dependencies
         run: bundle install
       - name: Run tests
