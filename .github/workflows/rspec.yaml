@@ -8,9 +8,9 @@ on:
 
 jobs:
   test:
-    runs-on: macos-12
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
       - name: Install dependencies
