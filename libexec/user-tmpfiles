@@ -1,0 +1,148 @@
+#!/usr/bin/python3
+"""Create user directories from a small subset of tmpfiles.d settings."""
+
+import os
+import pwd
+import re
+import shlex
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Directory:
+    """A validated directory rule and its location in the configuration."""
+
+    path: Path
+    mode: int
+    source: Path
+    line_number: int
+
+
+def expand_path(value, account):
+    """Expand supported specifiers once, without shell expansion."""
+    specifiers = {"h": account.pw_dir, "u": account.pw_name, "%": "%"}
+
+    def replace(match):
+        specifier = match.group(1)
+        if specifier not in specifiers:
+            raise ValueError(f"unsupported path specifier: {match.group(0)}")
+        return specifiers[specifier]
+
+    expanded = re.sub(r"%(.)?", replace, value)
+    if "\0" in expanded:
+        raise ValueError("path contains a null character")
+    path = Path(expanded)
+    if not path.is_absolute():
+        raise ValueError("path must be absolute after expanding specifiers")
+    return path
+
+
+def parse_line(line, account, source, line_number):
+    """Parse one rule, rejecting syntax outside the supported subset."""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    if "\\" in line:
+        raise ValueError("backslash escapes are not supported")
+
+    # shlex also accepts partial and concatenated shell quotes. Only allow
+    # quotes around the entire path, with whitespace between all fields.
+    if not re.fullmatch(
+        r"""[^\s'"]+\s+(?:'[^']*'|"[^"]*"|[^\s'"]+)(?:\s+[^\s'"]+)*""",
+        line,
+    ):
+        raise ValueError("expected a type and path; quote the entire path")
+    fields = shlex.split(line, comments=False, posix=True)
+    if not 2 <= len(fields) <= 7:
+        raise ValueError("expected 2 to 7 fields")
+    if fields[0] not in ("d", "d$"):
+        raise ValueError(f"unsupported type: {fields[0]}")
+
+    path = expand_path(fields[1], account)
+    mode = fields[2] if len(fields) > 2 else "-"
+    if mode == "-":
+        mode = "0755"
+    elif not re.fullmatch(r"[0-7]{3,4}", mode):
+        raise ValueError(f"unsupported mode: {mode}; expected octal permissions")
+    for name, value in zip(("User", "Group", "Age", "Argument"), fields[3:]):
+        if value != "-":
+            raise ValueError(f"{name} must be omitted or '-'")
+    return Directory(path, int(mode, 8), source, line_number)
+
+
+def parse_lines(lines, account, source):
+    """Parse a file's rules, adding source locations to syntax errors."""
+    directories = []
+    for line_number, line in enumerate(lines, 1):
+        try:
+            directory = parse_line(line, account, source, line_number)
+        except ValueError as error:
+            raise ValueError(f"{source}:{line_number}: {error}") from error
+        if directory is not None:
+            directories.append(directory)
+    return directories
+
+
+def read_config(config_dir, account):
+    """Validate every top-level configuration file before making changes."""
+    directories = []
+    for source in sorted(config_dir.iterdir()):
+        if not source.name.endswith(".conf") or not source.is_file():
+            continue
+        try:
+            with source.open(encoding="utf-8") as config:
+                lines = config.readlines()
+        except (OSError, UnicodeError) as error:
+            raise ValueError(f"{source}: {error}") from error
+
+        directories.extend(parse_lines(lines, account, source))
+    return directories
+
+
+def main():
+    """Read settings, then create directories and apply their permissions."""
+    args = sys.argv[1:]
+    default_config_dir = ".config/user-tmpfiles.d"
+    usage = f"Usage: {Path(sys.argv[0]).name} [CONFIG_DIR]"
+    if args in (["-h"], ["--help"]):
+        print(f"{usage}\n\n{__doc__}")
+        print(f"Default configuration directory: ~/{default_config_dir}")
+        return 0
+    if args[:1] == ["--"]:
+        args = args[1:]
+    elif args and args[0].startswith("-") and args[0] != "-":
+        print(f"{usage}\nError: unknown option {args[0]}")
+        return 2
+    if len(args) > 1:
+        print(usage)
+        print("Error: expected at most one configuration directory")
+        return 2
+
+    try:
+        account = pwd.getpwuid(os.geteuid())
+        config_dir = (
+            Path(args[0]) if args else (Path(account.pw_dir) / default_config_dir)
+        )
+        directories = read_config(config_dir, account)
+    except (OSError, ValueError, KeyError) as error:
+        print(f"Error: {error}")
+        return 1
+
+    for directory in directories:
+        try:
+            directory.path.mkdir(mode=directory.mode, parents=True, exist_ok=True)
+            directory.path.chmod(directory.mode)
+        except OSError as error:
+            print(
+                f"Error: {directory.source}:{directory.line_number}: "
+                f"{directory.path}: {error}"
+            )
+            return 1
+        print(f"Directory ready: {directory.path} ({directory.mode:04o})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
