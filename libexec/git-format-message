@@ -1,0 +1,96 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["mdformat==1.0.0", "markdown-it-py==4.3.0"]
+# ///
+"""Format a Git commit message's Markdown body at 72 columns."""
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+import mdformat
+from markdown_it import MarkdownIt
+
+
+def split_message(message):
+    """Keep the physical subject and final Git trailer paragraph verbatim."""
+    lines = message.split("\n")
+    subject = lines[0].removesuffix("\r")
+    body = "\n".join(lines[1:])
+    end = len(lines)
+    while end > 1 and not lines[end - 1].strip():
+        end -= 1
+    start = end
+    while start > 1 and lines[start - 1].strip():
+        start -= 1
+
+    # A trailer block must have a blank line before it. Parse only the final
+    # paragraph so Markdown headings elsewhere cannot act as Git comments.
+    if start > 1 and start < end:
+        # Git does not understand Markdown. Do not cut through a code block,
+        # HTML block, list, or other construct spanning the candidate boundary.
+        for token in MarkdownIt("commonmark").parse(body):
+            if token.map and token.map[0] < start - 1 < token.map[1]:
+                return subject, body, ""
+        candidate = "\n".join(lines[start:])
+        result = subprocess.run(
+            ["git", "interpret-trailers", "--parse", "--no-divider"],
+            input="Subject\n\n" + candidate,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        if result.stdout:
+            return subject, "\n".join(lines[1:start]), candidate
+    return subject, body, ""
+
+
+def format_message(message):
+    """Reflow only the body, keeping subject and trailer text unchanged."""
+    if not message.strip():
+        return message
+    subject, body, trailers = split_message(message)
+    formatted_body = mdformat.text(body, options={"wrap": 72})
+    result = subject + "\n"
+    if formatted_body:
+        result += "\n" + formatted_body
+    if trailers:
+        result += "\n" + trailers
+    return result
+
+
+def main():
+    """Read UTF-8 text and print the result or update the requested file."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "file", nargs="?", default="-", help="message file (default: stdin)"
+    )
+    parser.add_argument(
+        "--in-place", action="store_true", help="update the message file"
+    )
+    args = parser.parse_args()
+    if args.in_place and args.file == "-":
+        parser.error("--in-place requires a message file")
+
+    try:
+        path = None if args.file == "-" else Path(args.file)
+        original = sys.stdin.buffer.read() if path is None else path.read_bytes()
+        formatted = format_message(original.decode("utf-8")).encode("utf-8")
+        if args.in_place:
+            if formatted != original:
+                path.write_bytes(formatted)
+        else:
+            sys.stdout.buffer.write(formatted)
+    except subprocess.CalledProcessError as error:
+        print(f"{parser.prog}: {error.stderr.strip()}", file=sys.stderr)
+        return 1
+    except (OSError, UnicodeError) as error:
+        print(f"{parser.prog}: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -9,10 +9,17 @@ on:
 jobs:
   test:
     runs-on: macos-26
+    strategy:
+      matrix:
+        python-version: [ "3.11", "3.15" ]
     steps:
       - uses: actions/checkout@v7
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: bundle install
       - name: Run tests

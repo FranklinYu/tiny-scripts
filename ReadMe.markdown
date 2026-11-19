@@ -4,6 +4,30 @@
 
 This repository contains scripts that can be black-box tested.
 
+## git-format-message
+
+`libexec/git-format-message [FILE]` formats the Markdown body of a UTF-8 Git commit message.
+It reads stdin when `FILE` is omitted or `-`, and writes to stdout.
+Use `--in-place FILE` to update a file instead.
+
+```sh
+libexec/git-format-message <message.txt
+libexec/git-format-message --in-place message.txt
+```
+
+The script requires Git and [uv](https://docs.astral.sh/uv/guides/scripts/).
+
+The physical first line is preserved, even if it exceeds 50 characters.
+Ordinary line breaks within body paragraphs are joined before the text is wrapped to a target width of 72 characters.
+Paragraph boundaries and Markdown structure are preserved.
+Code blocks, long URLs, and unbroken words can exceed the target width.
+Markdown syntax may also be normalized.
+
+The subject, body, and trailers are separated by blank lines.
+The script does not add trailers or check the subject's style or length.
+Input should contain only the message, without Git editor comments, scissors, or a patch.
+Diagnostics go to stderr.
+
 ## user-tmpfiles
 
 `libexec/user-tmpfiles [CONFIG_DIRECTORY]` creates user directories from configuration files.
